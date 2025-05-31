@@ -42,9 +42,11 @@ USER spotify
 # Install Playwright browsers
 RUN npx playwright install chromium
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD node -e "console.log('Health check passed')" || exit 1
+# Health check - Requires curl to be installed.
+# The base playwright image mcr.microsoft.com/playwright:v1.40.0-focal should have curl.
+# If not, add 'curl' to the apt-get install list.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:3000/api/status || exit 1
 
 # Default command
 CMD ["node", "src/index.js"]

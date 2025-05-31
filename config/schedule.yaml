@@ -1,0 +1,36 @@
+# Placeholder for shift scheduling configurations
+# This file will be used by the Scheduler to dynamically load shift patterns.
+
+# shifts:
+#   - name: "AM Peak"
+#     # Cron pattern for when this shift's capacity rules apply
+#     # Example: Every day at 6:00 AM
+#     cronStartTime: "0 6 * * *"
+#     # Duration in hours for this shift (optional, could be determined by next shift's start)
+#     # durationHours: 6
+#     # Cron pattern for when this shift's capacity rules end (optional)
+#     # If not provided, capacity is maintained until the next shift starts.
+#     # cronEndTime: "0 12 * * *"
+#     # Percentage of total available accounts/sessions to run during this shift
+#     capacityPercentage: 30
+#
+#   - name: "PM Peak"
+#     cronStartTime: "0 12 * * *"
+#     # durationHours: 6
+#     capacityPercentage: 100
+#
+#   - name: "Night Operations"
+#     cronStartTime: "0 18 * * *"
+#     # durationHours: 12 # This shift would run until 6 AM the next day
+#     capacityPercentage: 50
+#
+#   - name: "Weekend Morning Special" # Example of a more specific shift
+#     cronStartTime: "0 8 * * 6,0" # 8 AM on Saturday and Sunday
+#     # durationHours: 4
+#     capacityPercentage: 75
+
+# General scheduler settings (optional)
+# settings:
+#   timezone: "UTC" # Timezone for cron patterns, defaults to system timezone
+#   maxConcurrentSessions: 100 # Overall cap, might be determined by available accounts instead
+#   defaultCapacityPercentage: 10 # If no shift is active (should not happen with 24/7 shifts)

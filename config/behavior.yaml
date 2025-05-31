@@ -1,0 +1,37 @@
+# Placeholder for behavior patterns (e.g., skip/jitter)
+# This file will be used in a future step to load configurations dynamically.
+
+# Example structure:
+# skipPatterns:
+#   short:
+#     duration: 40  # seconds
+#     jitter: 5     # seconds
+#   medium:
+#     duration: 55  # seconds
+#     jitter: 5     # seconds
+#   long:
+#     duration: 180 # seconds
+#     jitter: 5     # seconds
+#   # very_short for ads or intros
+#   very_short:
+#     duration: 10
+#     jitter: 2
+#   # xlong for podcasts or longer content engagement
+#   xlong:
+#     duration: 300
+#     jitter: 30
+
+# Other behavior settings could go here, for example:
+# playbackSpeed:
+#   normal: 1.0
+#   fastForward: 1.5 # For skipping intros/outros if identifiable
+#   slowed: 0.8 # Less likely for music, but possible for accessibility testing
+
+# User interaction patterns:
+# likeProbability: 0.1 # Chance to "like" a song
+# addToPlaylistProbability: 0.05 # Chance to add to a playlist
+# searchVariationProbability: 0.2 # Chance to vary search terms slightly
+# followArtistProbability: 0.03 # Chance to follow an artist after listening
+# exploreRelatedContentProbability: 0.15 # Chance to click on related artists/songs
+# pauseResumeProbability: 0.05 # Chance to pause and resume a track
+# volumeChangeProbability: 0.02 # Chance to slightly adjust volume (if controllable)

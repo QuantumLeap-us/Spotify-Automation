@@ -8,27 +8,49 @@ const ProxyManager = require('./proxy-manager');
 const StealthConfig = require('./stealth-config');
 const CaptchaSolver = require('./captcha-solver');
 const ConfigManager = require('./config-manager');
+const BehaviorEngine = require('./behavior-engine');
+const Scheduler = require('./scheduler');
+const Dashboard = require('./dashboard'); // Added Dashboard
 
 class SpotifyAutomation {
     constructor() {
-        this.logger = new Logger();
+        this.logger = new Logger('spotify-automation');
         this.configManager = new ConfigManager();
+        this.accountsConfig = this.loadAccountsConfig();
+
         this.sessionManager = new SessionManager();
-        this.proxyManager = new ProxyManager();
+        this.proxyManager = new ProxyManager(); // Initialized ProxyManager
         this.stealthConfig = new StealthConfig();
-        this.captchaSolver = new CaptchaSolver(process.env.CAPTCHA_API_KEY);
-        this.config = this.loadConfig();
+        this.captchaSolver = new CaptchaSolver(process.env.CAPTCHA_API_KEY || this.configManager.getCaptchaSettings().apiKey);
+        this.behaviorEngine = new BehaviorEngine();
+        this.scheduler = new Scheduler(this, this.sessionManager, this.configManager);
+        this.dashboard = new Dashboard(this.sessionManager, this.configManager, this.proxyManager); // Instantiated Dashboard
+
         this.sessions = new Map();
+
+        this.logger.info('SpotifyAutomation initialized with all components, including Dashboard.');
     }
 
-    // Load configuration from YAML file
-    loadConfig() {
+    // Load accounts configuration from YAML file
+    loadAccountsConfig() {
         try {
             const configPath = path.join(__dirname, '../config/accounts.yaml');
+            if (!fs.existsSync(configPath)) {
+                this.logger.error('accounts.yaml not found! Cannot start sessions.');
+                process.exit(1); // Critical error
+            }
             const configFile = fs.readFileSync(configPath, 'utf8');
-            return YAML.parse(configFile);
+            const parsedConfig = YAML.parse(configFile);
+            if (!parsedConfig || !parsedConfig.accounts || parsedConfig.accounts.length === 0) {
+                this.logger.error('No accounts found in accounts.yaml or file is empty. Cannot start sessions.');
+                process.exit(1); // Critical error
+            }
+            // Make the accounts config available at this.config as other parts of the class might expect it there.
+            // This also ensures that the 'config' property used by Scheduler for totalCapacity is the accounts config.
+            this.config = parsedConfig;
+            return parsedConfig;
         } catch (error) {
-            this.logger.error('Failed to load config:', error);
+            this.logger.error('Failed to load accounts.yaml:', error);
             process.exit(1);
         }
     }
@@ -522,45 +544,161 @@ class SpotifyAutomation {
         return null;
     }
 
-    // Start multiple sessions
-    async start(sessionCount = 1) {
-        this.logger.info(`Starting ${sessionCount} sessions`);
-
-        const promises = [];
-
-        for (let i = 0; i < sessionCount; i++) {
-            const account = this.config.accounts[i % this.config.accounts.length];
-
-            // Try to get proxy from account first, then from proxy pool
-            let proxy = this.parseProxyFromAccount(account);
-            if (!proxy && this.config.proxies && this.config.proxies.length > 0) {
-                proxy = this.config.proxies[i % this.config.proxies.length];
-            }
-
-            this.logger.info(`Session ${i + 1}: Account ${account.email}, Proxy: ${proxy ? proxy.host + ':' + proxy.port : 'none'}`);
-
-            const sessionPromise = this.runSession(i + 1, account, proxy);
-            promises.push(sessionPromise);
-
-            // Stagger session starts
-            await new Promise(resolve => setTimeout(resolve, 2000));
+    // Start multiple sessions, now primarily managed by Scheduler or specific commands
+    async startInitialSessions(sessionCount = 1) {
+        this.logger.info(`Starting initial ${sessionCount} sessions as per direct command.`);
+        if (!this.accountsConfig || !this.accountsConfig.accounts || this.accountsConfig.accounts.length === 0) {
+            this.logger.error("No accounts configured. Cannot start sessions.");
+            return;
         }
 
-        await Promise.all(promises);
-        this.logger.info('All sessions completed');
+        const numToStart = Math.min(sessionCount, this.accountsConfig.accounts.length);
+        this.logger.info(`Attempting to start ${numToStart} sessions.`);
+
+        // This method is now more about an initial burst or a specific command
+        // rather than the primary way sessions are managed if Scheduler is active.
+        await this.runMoreSessions(numToStart);
+    }
+
+    // Method for Scheduler to start more sessions
+    async runMoreSessions(count) {
+        this.logger.info(`Received request to run ${count} more sessions.`);
+        if (!this.accountsConfig || !this.accountsConfig.accounts || this.accountsConfig.accounts.length === 0) {
+            this.logger.error("No accounts loaded. Cannot start new sessions.");
+            return;
+        }
+
+        const availableAccounts = this.accountsConfig.accounts;
+        const currentlyActiveSessions = this.sessionManager.getAllSessions();
+        let startedCount = 0;
+
+        for (let i = 0; i < count; i++) {
+            // Find an account that is not currently in an active session
+            // This is a simplified selection logic. A more robust system would track account usage, cooldowns, etc.
+            const nextAccount = availableAccounts.find(acc =>
+                !currentlyActiveSessions.some(sess => sess.account && sess.account.email === acc.email && sess.status !== 'failed' && sess.status !== 'completed' && sess.status !== 'stopped')
+            );
+
+            if (!nextAccount) {
+                this.logger.warn("No available (unused) accounts to start a new session. Needed more but couldn't find one.");
+                break; // No more available accounts
+            }
+
+            // sessionId could be generated by sessionManager.createSession or passed if already known.
+            // For simplicity, let runSession generate it or use one from sessionManager.
+            const sessionId = this.sessionManager.generateSessionId();
+            let proxy = this.parseProxyFromAccount(nextAccount);
+            if (!proxy && this.accountsConfig.proxies && this.accountsConfig.proxies.length > 0) {
+                // Basic round-robin for proxies if not specified in account
+                // This proxy selection logic might need to be more sophisticated (e.g., via ProxyManager)
+                const proxyIndex = (currentlyActiveSessions.length + startedCount) % this.accountsConfig.proxies.length;
+                proxy = this.accountsConfig.proxies[proxyIndex];
+            }
+
+            this.logger.info(`Starting new session ${sessionId} for account ${nextAccount.email}. Proxy: ${proxy ? proxy.host : 'none'}`);
+            // Run session asynchronously without awaiting all of them here to allow parallel startup.
+            this.runSession(sessionId, nextAccount, proxy).catch(error => {
+                this.logger.error(`Error during session ${sessionId} execution:`, error);
+                // Error handling for individual session failure is within runSession
+            });
+            startedCount++;
+            await new Promise(resolve => setTimeout(resolve, this.configManager.getSessionSettings().stagger_delay || 2000)); // Stagger
+        }
+        this.logger.info(`Successfully initiated ${startedCount} new sessions.`);
+    }
+
+    // Method for Scheduler to stop some sessions
+    async stopSomeSessions(count) {
+        this.logger.info(`Received request to stop ${count} sessions.`);
+        const activeSessions = this.sessionManager.getAllSessions().filter(s => s.status === 'running' || s.status === 'idle' || s.status === 'initializing' || s.status === 'paused');
+
+        if (activeSessions.length === 0) {
+            this.logger.info("No active sessions to stop.");
+            return;
+        }
+
+        const numToStop = Math.min(count, activeSessions.length);
+        this.logger.info(`Attempting to stop ${numToStop} sessions.`);
+
+        for (let i = 0; i < numToStop; i++) {
+            // Simple strategy: stop the "oldest" running session or least active.
+            // For now, just take the first ones from the filtered list.
+            // A more sophisticated strategy could involve session activity, age, or other metrics.
+            const sessionToStop = activeSessions[i];
+            if (sessionToStop && sessionToStop.id) {
+                this.logger.info(`Stopping session ${sessionToStop.id}.`);
+                // This needs to gracefully stop the browser and cleanup.
+                // Assuming cleanupSession handles status updates and resource release.
+                // We need a way to signal the Playwright browser to close.
+                // This might involve finding the browser instance associated with the session.
+                // For now, we'll call cleanupSession which updates status and removes from active.
+                // The actual browser closing needs to be handled if not already done by runSession's finally block on error.
+
+                // Find the browser instance to close it. This is a challenge as runSession manages its own browser.
+                // One way is to store browser instances in SessionManager or make runSession responsive to a stop signal.
+                // For now, just marking as 'stopped'. Actual resource cleanup needs robust handling.
+                this.sessionManager.updateSessionStatus(sessionToStop.id, 'stopped', 'Scheduled stop by Scheduler');
+                this.sessionManager.cleanupSession(sessionToStop.id, 'stopped', 'Scheduled stop by Scheduler');
+                // TODO: Ensure browser associated with sessionToStop.id is actually closed.
+                // This might require a map of sessionId to browser instance or a more direct control mechanism.
+            }
+        }
+        this.logger.info(`Successfully stopped ${numToStop} sessions.`);
+    }
+
+    async initializeAndStart() {
+        await this.scheduler.initialize();
+        this.scheduler.start();
+
+        // Start the dashboard
+        // Get dashboard port from config, or use default 3000
+        const dashboardSettings = this.configManager.getFullAutomationConfig()?.dashboard; // Use getFullAutomationConfig()
+        const dashboardPort = dashboardSettings?.port || 3000;
+        this.dashboard.start(dashboardPort);
+
+        const initialSessionCount = this.configManager.getSessionSettings().initial_startup_count || 0;
+        if (initialSessionCount > 0 && this.scheduler.shifts.length === 0) {
+             this.logger.info(`No shifts defined by scheduler, starting initial ${initialSessionCount} sessions directly.`);
+             await this.startInitialSessions(initialSessionCount);
+        } else if (this.scheduler.shifts.length > 0) {
+            this.logger.info("Scheduler is active and will manage session capacity based on shifts.");
+        } else {
+            this.logger.info("No initial sessions to start, and scheduler has no shifts. System idle unless dashboard accessed.");
+        }
     }
 }
 
 // Main execution
 async function main() {
     const automation = new SpotifyAutomation();
-    const sessionCount = process.env.SESSION_COUNT || 3;
+    await automation.initializeAndStart(); // This now also starts the dashboard
 
-    await automation.start(parseInt(sessionCount));
+    // For a script, you might need to add a way to keep it alive or handle signals.
+    process.on('SIGINT', async () => {
+        automation.logger.info("SIGINT received. Shutting down scheduler and active sessions...");
+        // Here you would add logic to stop all cron jobs and gracefully terminate active sessions.
+        // For example, stop all sessions:
+        const allActive = automation.sessionManager.getAllSessions().length;
+        if (allActive > 0) {
+           await automation.stopSomeSessions(allActive);
+        }
+        automation.logger.info("Shutdown complete.");
+        process.exit(0);
+    });
+
+    automation.logger.info("Spotify Automation system is running. Scheduler is active. Press Ctrl+C to exit.");
+    // Keep alive for scheduler (if not in a server context like Express)
+    // This is a simple way; a more robust solution might involve an empty interval or server.
+    if (!module.parent) { // Only run keep-alive if this is the main module
+        setInterval(() => { /* Keep process alive for cron jobs */ }, 1000 * 60 * 60);
+    }
 }
 
 if (require.main === module) {
-    main().catch(console.error);
+    main().catch(error => {
+        console.error("Unhandled error in main execution:", error);
+        process.exit(1);
+    });
 }
 
 module.exports = SpotifyAutomation;

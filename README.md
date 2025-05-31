@@ -105,6 +105,7 @@ npm run docker:run
 # Scale to 10 workers
 npm run docker:scale
 ```
+**Note on Docker Configuration**: When using Docker, environment variables (like `CAPTCHA_API_KEY`) set in your shell or in a `.env` file at the project root will be automatically picked up by `docker-compose` and passed to the services.
 
 ## 📊 Command Reference
 

@@ -4,25 +4,42 @@ const path = require('path');
 
 class ConfigManager {
     constructor() {
-        this.config = this.loadConfig();
+        this.automationConfig = this.loadAutomationConfig(); // Renamed to avoid confusion
     }
 
-    // Load automation configuration
-    loadConfig() {
+    // Load a specific YAML configuration file by name
+    async loadConfig(fileName = 'automation.yaml') {
         try {
-            const configPath = path.join(__dirname, '../config/automation.yaml');
+            const configPath = path.join(__dirname, '../config/', fileName);
+            if (!fs.existsSync(configPath)) {
+                // console.warn(`Configuration file ${fileName} not found.`); // Less noisy
+                return null; // Return null if file doesn't exist, let caller handle defaults
+            }
             const configFile = fs.readFileSync(configPath, 'utf8');
             const config = YAML.parse(configFile);
             
-            // Set defaults if not specified
-            return this.setDefaults(config);
+            // For the main automation.yaml, we apply defaults. For others, we might not.
+            if (fileName === 'automation.yaml') {
+                return this.setDefaults(config);
+            }
+            return config; // Return parsed config, or null if error/not found
         } catch (error) {
-            console.warn('Failed to load automation config, using defaults:', error.message);
-            return this.getDefaultConfig();
+            console.error(`Failed to load config file ${fileName}:`, error.message);
+            // For the main automation.yaml, fallback to defaults. For others, throw or return null.
+            if (fileName === 'automation.yaml') {
+                return this.getDefaultConfig();
+            }
+            throw error; // Rethrow for other files so caller knows it failed
         }
     }
 
-    // Set default values for missing configuration
+    // Load main automation configuration
+    loadAutomationConfig() {
+        return this.loadConfig('automation.yaml');
+    }
+
+
+    // Set default values for missing automation configuration
     setDefaults(config) {
         const defaults = this.getDefaultConfig();
         
@@ -106,111 +123,111 @@ class ConfigManager {
 
     // Get language preferences
     getLanguagePreferences() {
-        return this.config.language;
+        return this.automationConfig.language;
     }
 
     // Get browser settings
     getBrowserSettings() {
-        return this.config.browser;
+        return this.automationConfig.browser;
     }
 
     // Get captcha settings
     getCaptchaSettings() {
-        return this.config.captcha;
+        return this.automationConfig.captcha;
     }
 
     // Get proxy settings
     getProxySettings() {
-        return this.config.proxy;
+        return this.automationConfig.proxy;
     }
 
     // Get logging settings
     getLoggingSettings() {
-        return this.config.logging;
+        return this.automationConfig.logging;
     }
 
     // Get session settings
     getSessionSettings() {
-        return this.config.session;
+        return this.automationConfig.session;
     }
 
     // Get error handling settings
     getErrorHandlingSettings() {
-        return this.config.error_handling;
+        return this.automationConfig.error_handling;
     }
 
     // Get development settings
     getDevelopmentSettings() {
-        return this.config.development;
+        return this.automationConfig.development;
     }
 
     // Check if English should be preferred
     shouldPreferEnglish() {
-        return this.config.language.prefer_english;
+        return this.automationConfig.language.prefer_english;
     }
 
     // Get fallback languages for a location
     getFallbackLanguages(location) {
-        return this.config.language.fallback_languages[location] || 
-               this.config.language.fallback_languages.DEFAULT;
+        return this.automationConfig.language.fallback_languages[location] ||
+               this.automationConfig.language.fallback_languages.DEFAULT;
     }
 
     // Get typing delay range
     getTypingDelay() {
-        const delay = this.config.browser.human_behavior.typing_delay;
+        const delay = this.automationConfig.browser.human_behavior.typing_delay;
         return Math.random() * (delay[1] - delay[0]) + delay[0];
     }
 
     // Get click delay range
     getClickDelay() {
-        const delay = this.config.browser.human_behavior.click_delay;
+        const delay = this.automationConfig.browser.human_behavior.click_delay;
         return Math.random() * (delay[1] - delay[0]) + delay[0];
     }
 
     // Check if human behavior simulation is enabled
     isHumanBehaviorEnabled() {
         return {
-            typing: this.config.browser.human_behavior.typing_delay,
-            mouse: this.config.browser.human_behavior.mouse_movement,
-            scroll: this.config.browser.human_behavior.scroll_behavior,
-            click: this.config.browser.human_behavior.click_delay
+            typing: this.automationConfig.browser.human_behavior.typing_delay,
+            mouse: this.automationConfig.browser.human_behavior.mouse_movement,
+            scroll: this.automationConfig.browser.human_behavior.scroll_behavior,
+            click: this.automationConfig.browser.human_behavior.click_delay
         };
     }
 
     // Get timeout for specific operation
     getTimeout(operation) {
-        return this.config.browser.timeouts[operation] || 30000;
+        return this.automationConfig.browser.timeouts[operation] || 30000;
     }
 
     // Check if debug mode is enabled
     isDebugMode() {
-        return this.config.development.debug_mode;
+        return this.automationConfig.development.debug_mode;
     }
 
     // Check if browser should stay open
     shouldKeepBrowserOpen() {
-        return this.config.development.keep_browser_open;
+        return this.automationConfig.development.keep_browser_open;
     }
 
     // Check if captcha auto-solve is enabled
     isCaptchaAutoSolveEnabled() {
-        return this.config.captcha.auto_solve;
+        return this.automationConfig.captcha.auto_solve;
     }
 
     // Check if real IP detection is enabled
     isRealIPDetectionEnabled() {
-        return this.config.proxy.detect_real_location;
+        return this.automationConfig.proxy.detect_real_location;
     }
 
-    // Get full configuration
-    getFullConfig() {
-        return this.config;
+    // Get full automation configuration
+    getFullAutomationConfig() { // Renamed for clarity
+        return this.automationConfig;
     }
 
-    // Update configuration at runtime
-    updateConfig(path, value) {
+    // Update automation configuration at runtime
+    updateAutomationConfig(path, value) { // Renamed for clarity
         const keys = path.split('.');
-        let current = this.config;
+        let current = this.automationConfig;
         
         for (let i = 0; i < keys.length - 1; i++) {
             if (!current[keys[i]]) {
@@ -222,15 +239,15 @@ class ConfigManager {
         current[keys[keys.length - 1]] = value;
     }
 
-    // Save configuration to file
-    saveConfig() {
+    // Save automation configuration to file
+    saveAutomationConfig() { // Renamed for clarity
         try {
             const configPath = path.join(__dirname, '../config/automation.yaml');
-            const yamlString = YAML.stringify(this.config);
+            const yamlString = YAML.stringify(this.automationConfig);
             fs.writeFileSync(configPath, yamlString, 'utf8');
             return true;
         } catch (error) {
-            console.error('Failed to save config:', error);
+            console.error('Failed to save automation config:', error);
             return false;
         }
     }

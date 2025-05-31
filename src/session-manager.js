@@ -28,7 +28,7 @@ class SessionManager {
             account: account,
             proxy: proxy,
             startTime: new Date(),
-            status: 'created',
+            status: 'initializing', // Changed from 'created' to 'initializing'
             stats: {
                 successfulStreams: 0,
                 failedStreams: 0,
@@ -46,9 +46,10 @@ class SessionManager {
     }
 
     // Update session status
-    updateSessionStatus(sessionId, status, details = {}) {
+    updateSessionStatus(sessionId, status, reason = '', details = {}) { // Added reason parameter
         const session = this.activeSessions.get(sessionId);
         if (session) {
+            const oldStatus = session.status;
             session.status = status;
             session.lastUpdate = new Date();
             
@@ -58,7 +59,11 @@ class SessionManager {
             this.activeSessions.set(sessionId, session);
             this.saveSessionData(sessionId, session);
             
-            this.logger.info(`Session ${sessionId} status updated to: ${status}`);
+            let logMessage = `Session ${sessionId} status updated from ${oldStatus} to: ${status}`;
+            if (reason) {
+                logMessage += ` - Reason: ${reason}`;
+            }
+            this.logger.info(logMessage);
         }
     }
 
@@ -79,20 +84,52 @@ class SessionManager {
         }
     }
 
-    // Add error to session
-    addSessionError(sessionId, error) {
+    // Implement heartbeat method
+    heartbeat(sessionId) {
         const session = this.activeSessions.get(sessionId);
-        if (session && session.stats) {
-            session.stats.errors.push({
-                timestamp: new Date(),
-                message: error.message || error,
-                stack: error.stack || null
-            });
-            
+        if (session) {
+            session.lastHeartbeat = new Date();
             this.activeSessions.set(sessionId, session);
+            // We might not need to save session data on every heartbeat for performance reasons.
+            // Depending on how critical this is, consider saving periodically or during other state changes.
+            // For now, let's save it to ensure data persistence.
             this.saveSessionData(sessionId, session);
+            this.logger.debug(`Heartbeat received for session ${sessionId}`);
+        } else {
+            this.logger.warn(`Heartbeat received for unknown or inactive session ${sessionId}`);
+        }
+    }
+
+    // Add error to session
+    addSessionError(sessionId, error, currentActivity = 'unknown activity', isCritical = false) { // Added currentActivity and isCritical
+        const session = this.activeSessions.get(sessionId);
+        if (session) { // Modified to check session directly, not session.stats
+            if (!session.stats) { // Initialize stats if not present
+                session.stats = { errors: [] };
+            }
+            if (!session.stats.errors) { // Initialize errors array if not present
+                session.stats.errors = [];
+            }
+
+            const errorEntry = {
+                timestamp: new Date(),
+                message: error.message || error.toString(), // Ensure error is stringified
+                stack: error.stack || null,
+                activity: currentActivity
+            };
+            session.stats.errors.push(errorEntry);
             
-            this.logger.error(`Session ${sessionId} error:`, error);
+            this.logger.error(`Session ${sessionId} error during ${currentActivity}: ${error.message || error.toString()}`, error.stack);
+
+            if (isCritical) {
+                this.logger.warn(`Critical error in session ${sessionId}, setting status to 'failed'.`);
+                this.updateSessionStatus(sessionId, 'failed', `Critical error during ${currentActivity}: ${error.message || error.toString()}`);
+            }
+            
+            this.activeSessions.set(sessionId, session); // Ensure session is updated in the map
+            this.saveSessionData(sessionId, session);
+        } else {
+            this.logger.error(`Failed to add error for unknown or inactive session ${sessionId}. Error: ${error.message || error.toString()}`);
         }
     }
 
@@ -158,34 +195,91 @@ class SessionManager {
     }
 
     // Clean up completed session
-    cleanupSession(sessionId) {
+    cleanupSession(sessionId, finalStatus = 'completed', reason = 'Session ended normally') { // Added finalStatus and reason
         const session = this.activeSessions.get(sessionId);
         if (session) {
+            this.logger.info(`Starting cleanup for session ${sessionId}. Current status: ${session.status}, Final status to be: ${finalStatus}. Reason: ${reason}`);
+
             session.endTime = new Date();
-            session.duration = session.endTime - session.startTime;
-            session.status = 'completed';
+            if (session.startTime) { // Ensure startTime exists before calculating duration
+                session.duration = session.endTime - new Date(session.startTime); // Ensure startTime is a Date object
+            } else {
+                session.duration = 0; // Or handle as an error/unknown duration
+                this.logger.warn(`Session ${sessionId} missing startTime for duration calculation.`);
+            }
             
+            // Placeholder for actual resource cleanup (e.g., browser contexts, files)
+            this.logger.info(`Placeholder: Perform actual resource cleanup for session ${sessionId} here (e.g., close browser, delete temp files).`);
+            // Example: if (session.browserContext) { await session.browserContext.close(); }
+
+            this.updateSessionStatus(sessionId, finalStatus, reason);
+
+            // Persist final session state before removing from active sessions
             this.saveSessionData(sessionId, session);
-            this.activeSessions.delete(sessionId);
             
-            this.logger.info(`Cleaned up session ${sessionId}`);
+            // Remove from active sessions map
+            const deleted = this.activeSessions.delete(sessionId);
+            if(deleted) {
+                this.logger.info(`Session ${sessionId} removed from active sessions.`);
+            } else {
+                this.logger.warn(`Attempted to delete session ${sessionId} from active sessions, but it was not found. It might have been already cleaned up.`);
+            }
+
+            this.logger.info(`Finished cleanup for session ${sessionId}. Final status: ${finalStatus}.`);
+        } else {
+            this.logger.warn(`Cleanup called for unknown or already cleaned up session ${sessionId}.`);
         }
     }
 
     // Get session statistics summary
     getSessionStatsSummary() {
-        const sessions = this.getAllSessions();
+        // It's better to get all session data from files for a complete summary,
+        // including those not currently in activeSessions (e.g. completed, failed and then cleaned up).
+        // However, for simplicity and consistency with current getAllSessions, we'll use activeSessions plus persisted ones.
+        // This part might need a more robust solution for tracking all historical states if needed.
+
+        const sessionFiles = fs.readdirSync(this.sessionsDir).filter(file => file.endsWith('.json') && !file.includes('_cookies'));
+        const allTrackedSessions = [];
+
+        sessionFiles.forEach(file => {
+            const sessionId = file.replace('.json', '');
+            const loadedSession = this.loadSessionData(sessionId);
+            if (loadedSession) {
+                allTrackedSessions.push(loadedSession);
+            }
+        });
+
+        // Ensure active sessions reflect the most current state if they haven't been persisted yet by cleanup/error handling
+        this.activeSessions.forEach((activeSession, sessionId) => {
+            const index = allTrackedSessions.findIndex(s => s.id === sessionId);
+            if (index !== -1) {
+                allTrackedSessions[index] = activeSession; // Update with in-memory version
+            } else {
+                allTrackedSessions.push(activeSession); // Add if not found (should not happen if saveSessionData is consistent)
+            }
+        });
+
+
         const summary = {
-            totalSessions: sessions.length,
-            activeSessions: sessions.filter(s => s.status === 'running').length,
-            completedSessions: sessions.filter(s => s.status === 'completed').length,
-            failedSessions: sessions.filter(s => s.status === 'failed').length,
+            totalTrackedSessions: allTrackedSessions.length,
+            initializingSessions: allTrackedSessions.filter(s => s.status === 'initializing').length,
+            runningSessions: allTrackedSessions.filter(s => s.status === 'running').length,
+            idleSessions: allTrackedSessions.filter(s => s.status === 'idle').length,
+            pausedSessions: allTrackedSessions.filter(s => s.status === 'paused').length,
+            stoppedSessions: allTrackedSessions.filter(s => s.status === 'stopped').length,
+            failedSessions: allTrackedSessions.filter(s => s.status === 'failed').length,
+            completedSessions: allTrackedSessions.filter(s => s.status === 'completed').length,
+            // Active sessions here could mean 'not in a final state' (completed, failed, stopped)
+            // For this summary, we'll count 'running' + 'initializing' + 'idle' + 'paused' as active operationally.
+            operationallyActiveSessions: 0,
             totalSuccessfulStreams: 0,
             totalFailedStreams: 0,
             totalPlaytime: 0
         };
 
-        sessions.forEach(session => {
+        summary.operationallyActiveSessions = summary.runningSessions + summary.initializingSessions + summary.idleSessions + summary.pausedSessions;
+
+        allTrackedSessions.forEach(session => {
             if (session.stats) {
                 summary.totalSuccessfulStreams += session.stats.successfulStreams || 0;
                 summary.totalFailedStreams += session.stats.failedStreams || 0;
