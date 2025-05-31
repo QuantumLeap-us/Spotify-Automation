@@ -12,7 +12,7 @@
     "test": "jest",
     "docker:build": "docker build -t spotify-farm .",
     "docker:run": "docker-compose up -d",
-    "docker:scale": "docker-compose up -d --scale session=10",
+    "docker:scale": "docker-compose up -d --scale worker=10",
     "docker:stop": "docker-compose down"
   },
   "dependencies": {

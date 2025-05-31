@@ -1,72 +1,130 @@
 version: '3.8'
 
 services:
-  # Main coordinator service
-  coordinator:
+  # Main application service (runs SessionManager, Scheduler, etc.)
+  session-manager: # Renamed from coordinator
     build: .
-    container_name: spotify-coordinator
+    container_name: spotify-session-manager
     environment:
       - NODE_ENV=production
-      - ROLE=coordinator # Main app instance with dashboard and scheduler
-      - SESSION_COUNT=1 # Initial session count for coordinator, if applicable before scheduler takes over
-      - CAPTCHA_API_KEY=${CAPTCHA_API_KEY} # Added CAPTCHA_API_KEY
+      - ROLE=session_manager # Clarify role if app uses it
+      - SESSION_COUNT=50 # As per TECHNICAL_IMPLEMENTATION.md
+      - PROXY_PROVIDER=smartproxy # As per TECHNICAL_IMPLEMENTATION.md
+      - CAPTCHA_API_KEY=${CAPTCHA_API_KEY}
+      # Add other necessary ENV VARS like API keys for SmartProxy if fetched via API
+      # SMARTPROXY_API_USER=${SMARTPROXY_API_USER}
+      # SMARTPROXY_API_PASS=${SMARTPROXY_API_PASS}
     volumes:
       - ./config:/app/config:ro
       - ./logs:/app/logs
       - ./sessions:/app/sessions
     ports:
-      - "3000:3000"
+      - "3000:3000" # Main app port (where dashboard runs if integrated)
     networks:
       - spotify-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/status"] # Updated health check
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"] # Updated to /health
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s # Give app more time to start before health check
+      start_period: 60s
 
   # Scalable session workers
-  session: # These are the workers, running the same image but potentially a different command or scaled separately
+  worker: # Renamed from session
     build: .
+    container_name: spotify-worker # To avoid issues if not using dynamic naming
     environment:
       - NODE_ENV=production
-      - ROLE=session # Identifies as a session worker (src/index.js might use this in future)
-      # SESSION_COUNT for individual workers is likely not needed if they are just processing tasks
+      - ROLE=worker # Identifies as a session worker
+      - WORKER_MODE=true # As per TECHNICAL_IMPLEMENTATION.md
       - DISPLAY=:99
-      - CAPTCHA_API_KEY=${CAPTCHA_API_KEY} # Added CAPTCHA_API_KEY
+      - CAPTCHA_API_KEY=${CAPTCHA_API_KEY}
+      # SMARTPROXY_API_USER=${SMARTPROXY_API_USER} # Workers might also need proxy access
+      # SMARTPROXY_API_PASS=${SMARTPROXY_API_PASS}
     volumes:
-      - ./config:/app/config:ro # Workers might need config for their tasks
-      - ./logs:/app/logs # Separate logs for workers if needed, or centralize logging
-      - ./sessions:/app/sessions
-      - /dev/shm:/dev/shm # Important for Playwright/Chrome
+      - ./config:/app/config:ro
+      - ./logs:/app/logs # Consider if workers should log to separate files or central logging
+      - ./sessions:/app/sessions # Workers might need to save session data/cookies
+      - /dev/shm:/dev/shm
     networks:
       - spotify-network
-    restart: unless-stopped # Restart workers if they fail
+    restart: unless-stopped
     depends_on:
-      coordinator: # Ensure coordinator is up before workers (optional, depends on app logic)
-        condition: service_healthy # Wait for coordinator to be healthy
-    deploy: # This section is for Docker Swarm, not primarily for 'docker-compose scale'
-      replicas: 3 # Default replicas if deploying to Swarm
-      resources:
-        limits:
-          memory: 1G # Max memory per worker
-          cpus: '0.5' # Max CPU per worker
-        reservations:
-          memory: 512M # Reserved memory
-          cpus: '0.25' # Reserved CPU
-    # Health check for session workers might be different or not needed if they don't run a server
-    # For now, removing it as they don't expose a port/API by default.
-    # If they did run a simple health check endpoint, it could be added.
-    # Security settings (good to have)
+      session-manager: # Depends on the main app service
+        condition: service_healthy
+    # No healthcheck for workers by default, as they don't typically run a server.
+    # Their health can be inferred by task completion or via session-manager.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # SYS_ADMIN is a very broad permission. If --no-sandbox is used for Playwright (as in src/index.js),
-    # this might not be strictly necessary. Evaluate if it can be removed or replaced with more specific capabilities.
     cap_add:
-      - SYS_ADMIN # Consider if still needed with --no-sandbox
+      - SYS_ADMIN # Review if still needed with --no-sandbox in Playwright args
+
+  # Separate Dashboard Service
+  dashboard:
+    build: . # Assuming it uses the same Dockerfile but runs in DASHBOARD_ONLY mode
+    container_name: spotify-dashboard
+    ports:
+      - "8081:8080" # Exposing on host 8081, container listens on 8080
+    environment:
+      - NODE_ENV=production
+      - DASHBOARD_ONLY=true # Application needs to recognize this
+      - APP_PORT=8080 # Tell the app inside to use this port for the dashboard
+      # It might need to know where session-manager API is if it fetches data
+      # SESSION_MANAGER_API_URL=http://session-manager:3000/api
+    volumes:
+      - ./config:/app/config:ro # Read-only config
+      - ./logs:/app/logs # Read-only logs if it displays log summaries
+    restart: unless-stopped
+    depends_on:
+      session-manager:
+        condition: service_healthy
+    healthcheck: # Dashboard should also have a health check
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"] # Assumes dashboard runs its own /health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.47.2 # Using a specific version
+    container_name: spotify-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    restart: unless-stopped
+    networks:
+      - spotify-network
+    depends_on:
+      - session-manager # Or whichever service exposes /metrics
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:10.1.5 # Using a specific version
+    container_name: spotify-grafana
+    ports:
+      - "3001:3000" # Grafana default internal port is 3000
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin # Default admin password, change in production
+      # Example: Configure Prometheus datasource
+      # - GF_DATASOURCES_0_NAME=Prometheus
+      # - GF_DATASOURCES_0_TYPE=prometheus
+      # - GF_DATASOURCES_0_URL=http://prometheus:9090
+      # - GF_DATASOURCES_0_ACCESS=proxy
+      # - GF_DATASOURCES_0_IS_DEFAULT=true
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - spotify-network
+    depends_on:
+      - prometheus
 
   # Optional: Redis for session coordination (if needed for large scale)
   redis:
@@ -78,42 +136,32 @@ services:
     networks:
       - spotify-network
     restart: unless-stopped
-    profiles: # Only start Redis if 'redis' profile is activated
+    profiles:
       - redis
-
-# The 'monitor' service seems redundant if the 'coordinator' runs the dashboard on port 3000.
-# If 'monitor' was intended for a different purpose (e.g. separate monitoring stack like Prometheus/Grafana),
-# it would be defined differently. For now, removing it to avoid confusion with the integrated dashboard.
 
 networks:
   spotify-network:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.20.0.0/16 # Example subnet
 
 volumes:
   redis-data:
     driver: local
+  grafana-storage: {} # Define the Grafana storage volume
 
 # Example usage commands:
-# Start with default 3 sessions:
-#   docker-compose up -d
+# docker-compose up -d session-manager worker dashboard prometheus grafana
 #
-# Scale to 10 sessions:
-#   docker-compose up -d --scale session=10
+# Scale workers:
+#   docker-compose up -d --scale worker=10
 #
-# Scale to 100 sessions:
-#   docker-compose up -d --scale session=100
-#
-# Start with monitoring:
-#   docker-compose --profile monitoring up -d
-#
-# Start with Redis coordination:
+# Start with Redis:
 #   docker-compose --profile redis up -d
 #
-# View logs:
-#   docker-compose logs -f session
+# View logs (e.g., session-manager or worker):
+#   docker-compose logs -f session-manager
 #
 # Stop all:
 #   docker-compose down

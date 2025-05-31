@@ -1,36 +1,52 @@
-# Placeholder for shift scheduling configurations
-# This file will be used by the Scheduler to dynamically load shift patterns.
+# Shift scheduling configurations for Spotify Automation Farm
 
-# shifts:
-#   - name: "AM Peak"
-#     # Cron pattern for when this shift's capacity rules apply
-#     # Example: Every day at 6:00 AM
-#     cronStartTime: "0 6 * * *"
-#     # Duration in hours for this shift (optional, could be determined by next shift's start)
-#     # durationHours: 6
-#     # Cron pattern for when this shift's capacity rules end (optional)
-#     # If not provided, capacity is maintained until the next shift starts.
-#     # cronEndTime: "0 12 * * *"
-#     # Percentage of total available accounts/sessions to run during this shift
-#     capacityPercentage: 30
-#
-#   - name: "PM Peak"
-#     cronStartTime: "0 12 * * *"
-#     # durationHours: 6
-#     capacityPercentage: 100
-#
-#   - name: "Night Operations"
-#     cronStartTime: "0 18 * * *"
-#     # durationHours: 12 # This shift would run until 6 AM the next day
-#     capacityPercentage: 50
-#
-#   - name: "Weekend Morning Special" # Example of a more specific shift
-#     cronStartTime: "0 8 * * 6,0" # 8 AM on Saturday and Sunday
-#     # durationHours: 4
-#     capacityPercentage: 75
+# Defines different operational shifts, their timing, and capacity.
+# - name: Descriptive name for the shift.
+# - start_hour: The hour (0-23) when the shift begins (inclusive).
+# - end_hour: The hour (0-23) when the shift ends (exclusive).
+#   - If end_hour < start_hour, the shift is assumed to cross midnight.
+# - capacity: Percentage (0.0 to 1.0) of maxSessions to run during this shift.
+# - timezone: Timezone for interpreting start_hour and end_hour (e.g., "UTC", "America/New_York").
+#             If not specified, system's local timezone or UTC might be assumed by node-cron.
+# - cronPattern: Specific cron pattern for starting this shift. Used by node-cron.
+shifts:
+  morning:
+    name: "Morning Shift"
+    start_hour: 6
+    end_hour: 12
+    capacity: 0.3
+    timezone: "UTC"
+    cronPattern: "0 6 * * *"
+  afternoon:
+    name: "Afternoon Shift"
+    start_hour: 12
+    end_hour: 18
+    capacity: 1.0 # 100% capacity
+    timezone: "UTC"
+    cronPattern: "0 12 * * *"
+  night:
+    name: "Night Shift"
+    start_hour: 18
+    end_hour: 6 # Crosses midnight, ends at 6 AM the next day
+    capacity: 0.5
+    timezone: "UTC"
+    cronPattern: "0 18 * * *"
+  # Example of a weekend-specific shift (would require more complex getCurrentShift logic for name matching)
+  # weekend_peak:
+  #   name: "Weekend Peak"
+  #   start_hour: 10
+  #   end_hour: 16
+  #   capacity: 0.8
+  #   timezone: "America/Los_Angeles"
+  #   cronPattern: "0 10 * * 6,0" # 10 AM on Sat and Sun
 
-# General scheduler settings (optional)
-# settings:
-#   timezone: "UTC" # Timezone for cron patterns, defaults to system timezone
-#   maxConcurrentSessions: 100 # Overall cap, might be determined by available accounts instead
-#   defaultCapacityPercentage: 10 # If no shift is active (should not happen with 24/7 shifts)
+# Configuration for transitions between shifts.
+transition:
+  # Duration in minutes over which capacity changes should be spread when a shift changes.
+  duration_minutes: 30
+
+  # Whether to implement gradual scaling during the transition period.
+  gradual_scaling: true # Placeholder for future use
+
+  # Whether a brief overlap in shift capacities is allowed during transition.
+  overlap_allowed: true # Placeholder for future use

@@ -1,41 +1,93 @@
 const YAML = require('yaml');
 const fs = require('fs');
 const path = require('path');
+const Logger = require('./logger'); // Import Logger
 
 class ConfigManager {
     constructor() {
-        this.automationConfig = this.loadAutomationConfig(); // Renamed to avoid confusion
+        // It's better to initialize logger here if it's to be used in methods like loadConfig
+        // However, if this class is purely for config loading and other classes instantiate their own loggers,
+        // then a logger might not be needed here, or only a static/basic one.
+        // For now, assuming methods will instantiate their own loggers if needed, or one is passed.
+        // Let's add a basic logger for internal use of ConfigManager itself.
+        this.logger = new Logger('config-manager');
+        this.automationConfig = this.loadAutomationConfig();
+        // Cache for other configs
+        this.cachedConfigs = {};
     }
 
-    // Load a specific YAML configuration file by name
-    async loadConfig(fileName = 'automation.yaml') {
+    // Load a specific YAML configuration file by name, with caching
+    loadConfig(fileName) { // Removed async as fs.readFileSync is sync
+        if (this.cachedConfigs[fileName]) {
+            this.logger.debug(`Returning cached config for ${fileName}`);
+            return this.cachedConfigs[fileName];
+        }
+
+        this.logger.info(`Loading configuration file: ${fileName}`);
         try {
             const configPath = path.join(__dirname, '../config/', fileName);
             if (!fs.existsSync(configPath)) {
-                // console.warn(`Configuration file ${fileName} not found.`); // Less noisy
-                return null; // Return null if file doesn't exist, let caller handle defaults
+                this.logger.warn(`Configuration file ${fileName} not found at ${configPath}.`);
+                this.cachedConfigs[fileName] = null; // Cache null if not found
+                return null;
             }
             const configFile = fs.readFileSync(configPath, 'utf8');
             const config = YAML.parse(configFile);
+            this.logger.info(`Successfully loaded and parsed ${fileName}.`);
+            this.cachedConfigs[fileName] = config; // Cache the loaded config
             
-            // For the main automation.yaml, we apply defaults. For others, we might not.
-            if (fileName === 'automation.yaml') {
-                return this.setDefaults(config);
+            if (fileName === 'automation.yaml') { // Specific handling for main automation config
+                return this.setDefaults(config); // setDefaults might modify this.automationConfig if not careful
             }
-            return config; // Return parsed config, or null if error/not found
+            return config;
         } catch (error) {
-            console.error(`Failed to load config file ${fileName}:`, error.message);
-            // For the main automation.yaml, fallback to defaults. For others, throw or return null.
-            if (fileName === 'automation.yaml') {
+            this.logger.error(`Failed to load or parse config file ${fileName}: ${error.message}`, error.stack);
+            this.cachedConfigs[fileName] = null; // Cache null on error
+            if (fileName === 'automation.yaml') { // Fallback for critical automation config
+                this.logger.warn(`Falling back to default automation config due to error.`);
                 return this.getDefaultConfig();
             }
-            throw error; // Rethrow for other files so caller knows it failed
+            // For other configs, returning null is often preferred, letting the caller handle defaults.
+            return null;
         }
     }
 
     // Load main automation configuration
     loadAutomationConfig() {
-        return this.loadConfig('automation.yaml');
+        // Ensure automationConfig is set after defaults are applied
+        const config = this.loadConfig('automation.yaml');
+        // If loadConfig already called setDefaults for automation.yaml, this.automationConfig should be correct.
+        // However, setDefaults returns a new object. So, ensure this.automationConfig gets that.
+        // This is a bit tangled. Let's simplify: loadAutomationConfig specifically handles automation.yaml and its defaults.
+        // The generic loadConfig will just load and parse other files.
+
+        try {
+            const configPath = path.join(__dirname, '../config/automation.yaml');
+            if (!fs.existsSync(configPath)) {
+                this.logger.warn(`automation.yaml not found. Using default automation config.`);
+                return this.getDefaultConfig();
+            }
+            const configFile = fs.readFileSync(configPath, 'utf8');
+            const parsedConfig = YAML.parse(configFile);
+            this.logger.info('Successfully loaded automation.yaml.');
+            return this.setDefaults(parsedConfig); // Apply defaults
+        } catch (error) {
+            this.logger.error(`Failed to load automation.yaml: ${error.message}. Using default automation config.`, error.stack);
+            return this.getDefaultConfig();
+        }
+    }
+
+    // Method to get specific configurations
+    getBehaviorConfig() {
+        return this.loadConfig('behavior.yaml');
+    }
+
+    getScheduleConfig() {
+        return this.loadConfig('schedule.yaml');
+    }
+
+    getProxiesConfig() { // Added for consistency, used by SmartproxyManager
+        return this.loadConfig('proxies.yaml');
     }
 
 

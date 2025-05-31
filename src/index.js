@@ -4,31 +4,73 @@ const fs = require('fs');
 const path = require('path');
 const Logger = require('./logger');
 const SessionManager = require('./session-manager');
-const ProxyManager = require('./proxy-manager');
+const SmartproxyManager = require('./smartproxy-manager'); // Updated to SmartproxyManager
 const StealthConfig = require('./stealth-config');
 const CaptchaSolver = require('./captcha-solver');
 const ConfigManager = require('./config-manager');
 const BehaviorEngine = require('./behavior-engine');
-const Scheduler = require('./scheduler');
-const Dashboard = require('./dashboard'); // Added Dashboard
+const ShiftScheduler = require('./shift-scheduler');
+const Dashboard = require('./dashboard');
+const MonitoringSystem = require('./monitoring-system'); // Import MonitoringSystem
 
 class SpotifyAutomation {
-    constructor() {
-        this.logger = new Logger('spotify-automation');
-        this.configManager = new ConfigManager();
+    constructor(configManagerInstance, loggerInstance) { // Allow optional injection for testing
+        this.configManager = configManagerInstance || new ConfigManager();
+        this.logger = loggerInstance || new Logger('spotify-automation');
+
         this.accountsConfig = this.loadAccountsConfig();
 
-        this.sessionManager = new SessionManager();
-        this.proxyManager = new ProxyManager(); // Initialized ProxyManager
-        this.stealthConfig = new StealthConfig();
-        this.captchaSolver = new CaptchaSolver(process.env.CAPTCHA_API_KEY || this.configManager.getCaptchaSettings().apiKey);
-        this.behaviorEngine = new BehaviorEngine();
-        this.scheduler = new Scheduler(this, this.sessionManager, this.configManager);
-        this.dashboard = new Dashboard(this.sessionManager, this.configManager, this.proxyManager); // Instantiated Dashboard
+        // Instantiate Managers, passing dependencies
+        this.proxyManager = new SmartproxyManager(this.configManager, this.logger.getChildLogger('proxy'));
+
+        // For MonitoringSystem, it needs many components. Some might not be fully ready here.
+        // Pass them and let MonitoringSystem handle their potential unavailability if necessary during its own methods.
+        // Dashboard is instantiated first, then passed to MonitoringSystem
+        this.dashboard = new Dashboard(null, this.configManager, this.proxyManager, null); // Initial pass, SessionManager and MonitoringSystem will be updated
+
+        this.monitoringSystem = new MonitoringSystem(
+            this.configManager,
+            null, // sessionManager not yet created
+            this.proxyManager,
+            null, // scheduler not yet created
+            this.dashboard // Pass the dashboard instance
+        );
+        // Now update dashboard with monitoring system
+        this.dashboard.monitoringSystem = this.monitoringSystem;
+
+
+        // SessionManager needs MonitoringSystem, ShiftScheduler, BehaviorEngine, ProxyManager
+        this.sessionManager = new SessionManager(
+            this.logger.getChildLogger('session'),
+            this.configManager,
+            this.scheduler, // Pass the main ShiftScheduler instance
+            this.behaviorEngine, // Pass BehaviorEngine instance
+            this.proxyManager,
+            this.monitoringSystem
+        );
+        // Update MonitoringSystem and Dashboard with the now created SessionManager
+        this.monitoringSystem.sessionManager = this.sessionManager;
+        this.dashboard.sessionManager = this.sessionManager;
+
+
+        this.stealthConfig = new StealthConfig(); // Typically doesn't need other managers
+        this.captchaSolver = new CaptchaSolver(
+            process.env.CAPTCHA_API_KEY || this.configManager.getCaptchaSettings()?.apiKey,
+            this.logger.getChildLogger('captcha')
+        );
+        this.behaviorEngine = new BehaviorEngine(this.configManager);
+
+        this.scheduler = new ShiftScheduler(
+            this, // Pass SpotifyAutomation instance
+            this.sessionManager,
+            this.configManager
+        );
+        // Update MonitoringSystem with the now created ShiftScheduler
+        this.monitoringSystem.shiftScheduler = this.scheduler;
 
         this.sessions = new Map();
 
-        this.logger.info('SpotifyAutomation initialized with all components, including Dashboard.');
+        this.logger.info('SpotifyAutomation: All components initialized.');
     }
 
     // Load accounts configuration from YAML file
@@ -647,46 +689,126 @@ class SpotifyAutomation {
     }
 
     async initializeAndStart() {
+        this.logger.info("Starting SpotifyAutomation system initialization...");
+
+        // Handle DASHBOARD_ONLY mode
+        if (process.env.DASHBOARD_ONLY === 'true') {
+            this.logger.info('Running in DASHBOARD_ONLY mode.');
+            // Only start components necessary for the dashboard.
+            // ConfigManager and Logger are already initialized.
+            // MonitoringSystem might be needed if dashboard relies on its report structure,
+            // but it would need a way to get data if SessionManager isn't running.
+            // For now, let's assume the dashboard in this mode might show limited data
+            // or is configured to fetch from a running session-manager service.
+
+            // Ensure dashboard has its essential components even if others are not fully active
+            if (this.dashboard) {
+                 // If MonitoringSystem is used by dashboard, it needs to be robust to missing managers
+                if (this.monitoringSystem) {
+                    this.monitoringSystem.sessionManager = this.monitoringSystem.sessionManager || { getSessionStatsSummary: () => ({}), getAllSessions: () => [] }; // Mocked if not present
+                    this.monitoringSystem.proxyManager = this.monitoringSystem.proxyManager || { getProxyStats: () => ({}) };
+                    this.monitoringSystem.shiftScheduler = this.monitoringSystem.shiftScheduler || { getCurrentShift: () => "N/A_dashboard_only" };
+                }
+                 if(this.dashboard.monitoringSystem && !this.dashboard.monitoringSystem.sessionManager) { // If it wasn't set due to SM not existing
+                    this.dashboard.monitoringSystem.sessionManager = { getSessionStatsSummary: () => ({}), getAllSessions: () => [] };
+                 }
+                 if(this.dashboard.sessionManager === null && this.monitoringSystem?.sessionManager) { // If dashboard's SM is null but MS has one (mocked)
+                    this.dashboard.sessionManager = this.monitoringSystem.sessionManager;
+                 }
+
+
+                const appPort = process.env.APP_PORT || this.configManager.getFullAutomationConfig()?.dashboard?.port || 8080;
+                this.dashboard.start(appPort);
+                this.logger.info(`Dashboard (standalone) started on port ${appPort}.`);
+            } else {
+                this.logger.error('Dashboard instance not available in DASHBOARD_ONLY mode.');
+            }
+            // Do not proceed with full system startup (scheduler, sessions, etc.)
+            return;
+        }
+
+        // Full system startup
+        await this.proxyManager.initializePool();
+        this.logger.info('Proxy pool initialized.');
+
         await this.scheduler.initialize();
         this.scheduler.start();
+        this.logger.info('ShiftScheduler initialized and started.');
 
-        // Start the dashboard
-        // Get dashboard port from config, or use default 3000
-        const dashboardSettings = this.configManager.getFullAutomationConfig()?.dashboard; // Use getFullAutomationConfig()
+        const heartbeatInterval = this.configManager.getFullAutomationConfig()?.monitoring?.heartbeat_interval_ms || 30000;
+        this.monitoringSystem.startHeartbeatMonitoring(heartbeatInterval);
+        this.logger.info('MonitoringSystem heartbeat monitoring started.');
+
+        const dashboardSettings = this.configManager.getFullAutomationConfig()?.dashboard;
         const dashboardPort = dashboardSettings?.port || 3000;
+        // In full mode, the main app (session-manager service) runs the dashboard.
+        // The separate 'dashboard' service in docker-compose is for DASHBOARD_ONLY=true.
+        // So, the port here should be the main app's port (3000 by default).
         this.dashboard.start(dashboardPort);
+        this.logger.info(`Dashboard (integrated) started on port ${dashboardPort}.`);
 
-        const initialSessionCount = this.configManager.getSessionSettings().initial_startup_count || 0;
-        if (initialSessionCount > 0 && this.scheduler.shifts.length === 0) {
-             this.logger.info(`No shifts defined by scheduler, starting initial ${initialSessionCount} sessions directly.`);
-             await this.startInitialSessions(initialSessionCount);
-        } else if (this.scheduler.shifts.length > 0) {
-            this.logger.info("Scheduler is active and will manage session capacity based on shifts.");
+        const initialSessionCount = this.configManager.getSessionSettings()?.initial_startup_count || 0;
+        if (initialSessionCount > 0 && Object.keys(this.scheduler.shiftsConfig).length === 0) {
+            this.logger.info(`Scheduler has no defined shifts. Starting initial ${initialSessionCount} sessions based on config.`);
+            await this.startInitialSessions(initialSessionCount);
+        } else if (Object.keys(this.scheduler.shiftsConfig).length > 0) {
+            this.logger.info("Scheduler is active and will manage session capacity based on current shift definitions.");
+            // Scheduler's `start()` method already calls `adjustCapacity` for the current time.
         } else {
-            this.logger.info("No initial sessions to start, and scheduler has no shifts. System idle unless dashboard accessed.");
+            this.logger.info("No initial sessions configured to start, and scheduler has no shifts. System will be idle until sessions are started via API or other triggers (if implemented).");
         }
+
+        // If SessionManager has a polled lifecycle management (it does, manageLifecycle)
+        // This could be started here.
+        const lifecycleInterval = this.configManager.getFullAutomationConfig()?.session_manager?.lifecycle_interval_ms || 60000; // Default 1 min
+        this.sessionManagerLifecycleIntervalId = setInterval(() => {
+            if (this.sessionManager && typeof this.sessionManager.manageLifecycle === 'function') {
+                this.sessionManager.manageLifecycle().catch(err => {
+                    this.logger.error('Error during SessionManager manageLifecycle:', err);
+                });
+            }
+        }, lifecycleInterval);
+        this.logger.info(`SessionManager lifecycle management polling started every ${lifecycleInterval}ms.`);
+
+
+        this.logger.info("SpotifyAutomation system initialization complete. System is running.");
+    }
+
+    // Graceful shutdown
+    async shutdown() {
+        this.logger.info('Initiating graceful shutdown...');
+        if (this.monitoringSystem) {
+            this.monitoringSystem.stopHeartbeatMonitoring();
+        }
+        if (this.sessionManagerLifecycleIntervalId) {
+            clearInterval(this.sessionManagerLifecycleIntervalId);
+        }
+        // TODO: Stop scheduler cron jobs
+        // TODO: Gracefully stop all active sessions via SessionManager
+        const activeSessions = this.sessionManager ? this.sessionManager.getAllSessions() : [];
+        if (activeSessions.length > 0) {
+            this.logger.info(`Stopping ${activeSessions.length} active sessions...`);
+            await this.stopSomeSessions(activeSessions.length); // stopSomeSessions needs to be more robust for this
+        }
+        // TODO: Close dashboard server (if it holds the process open)
+        this.logger.info('Shutdown sequence completed.');
+        process.exit(0);
     }
 }
 
 // Main execution
 async function main() {
     const automation = new SpotifyAutomation();
-    await automation.initializeAndStart(); // This now also starts the dashboard
+    await automation.initializeAndStart();
 
-    // For a script, you might need to add a way to keep it alive or handle signals.
     process.on('SIGINT', async () => {
-        automation.logger.info("SIGINT received. Shutting down scheduler and active sessions...");
-        // Here you would add logic to stop all cron jobs and gracefully terminate active sessions.
-        // For example, stop all sessions:
-        const allActive = automation.sessionManager.getAllSessions().length;
-        if (allActive > 0) {
-           await automation.stopSomeSessions(allActive);
-        }
-        automation.logger.info("Shutdown complete.");
-        process.exit(0);
+        await automation.shutdown();
+    });
+    process.on('SIGTERM', async () => {
+        await automation.shutdown();
     });
 
-    automation.logger.info("Spotify Automation system is running. Scheduler is active. Press Ctrl+C to exit.");
+    // Keep alive for long-running processes like scheduler and dashboard server
     // Keep alive for scheduler (if not in a server context like Express)
     // This is a simple way; a more robust solution might involve an empty interval or server.
     if (!module.parent) { // Only run keep-alive if this is the main module
