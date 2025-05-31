@@ -1,0 +1,48 @@
+{
+  "name": "spotify-automation-farm",
+  "version": "2.0.0",
+  "description": "Production-grade Spotify Browser Automation Farm with Session Orchestration",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "farm": "node src/index.js --mode=farm",
+    "dashboard": "node src/index.js --mode=dashboard",
+    "monitor": "node src/index.js --mode=monitor",
+    "test": "node src/index.js --mode=test",
+    "docker:build": "docker build -t spotify-farm .",
+    "docker:run": "docker-compose up -d",
+    "docker:scale": "docker-compose up -d --scale worker=10",
+    "docker:stop": "docker-compose down"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "yaml": "^2.3.4",
+    "winston": "^3.11.0",
+    "2captcha": "^2.1.0",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.3",
+    "axios": "^1.6.2",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "spotify",
+    "automation",
+    "farm",
+    "browser-orchestration",
+    "session-management",
+    "playwright",
+    "stealth",
+    "docker",
+    "streaming",
+    "production-grade"
+  ],
+  "author": "Spotify Automation Farm Team",
+  "license": "MIT"
+}

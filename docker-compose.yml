@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # Main coordinator service
+  coordinator:
+    build: .
+    container_name: spotify-coordinator
+    environment:
+      - NODE_ENV=production
+      - ROLE=coordinator
+      - SESSION_COUNT=1
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+    ports:
+      - "3000:3000"
+    networks:
+      - spotify-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Health check')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Scalable session workers
+  session:
+    build: .
+    environment:
+      - NODE_ENV=production
+      - ROLE=session
+      - SESSION_COUNT=1
+      - DISPLAY=:99
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+      - /dev/shm:/dev/shm
+    networks:
+      - spotify-network
+    restart: unless-stopped
+    depends_on:
+      - coordinator
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Session health check')"]
+      interval: 60s
+      timeout: 15s
+      retries: 2
+    # Security settings
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN  # Required for Chrome sandbox
+
+  # Optional: Redis for session coordination (if needed for large scale)
+  redis:
+    image: redis:7-alpine
+    container_name: spotify-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - spotify-network
+    restart: unless-stopped
+    profiles:
+      - redis
+
+  # Optional: Monitoring service
+  monitor:
+    build: .
+    container_name: spotify-monitor
+    environment:
+      - NODE_ENV=production
+      - ROLE=monitor
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./sessions:/app/sessions:ro
+    ports:
+      - "3001:3001"
+    networks:
+      - spotify-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+networks:
+  spotify-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  redis-data:
+    driver: local
+
+# Example usage commands:
+# Start with default 3 sessions:
+#   docker-compose up -d
+#
+# Scale to 10 sessions:
+#   docker-compose up -d --scale session=10
+#
+# Scale to 100 sessions:
+#   docker-compose up -d --scale session=100
+#
+# Start with monitoring:
+#   docker-compose --profile monitoring up -d
+#
+# Start with Redis coordination:
+#   docker-compose --profile redis up -d
+#
+# View logs:
+#   docker-compose logs -f session
+#
+# Stop all:
+#   docker-compose down

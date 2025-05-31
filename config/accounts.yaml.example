@@ -1,0 +1,154 @@
+# Spotify Automation System Configuration Example
+
+# Account Configuration
+# Add your Spotify accounts here
+accounts:
+  # Example account
+  - email: your-email@example.com
+    password: your-password
+    proxy: 192.168.100.1:2112  # Optional proxy for this account
+
+  # Multiple accounts example
+  # - email: user2@example.com
+  #   password: password2
+  #   proxy: us-proxy.example.com:8080:username:password
+
+  # - email: user3@example.com
+  #   password: password3
+  #   proxy: uk-proxy.example.com:8080:username:password
+
+# Proxy Configuration
+# Configure your proxies here
+proxies:
+  # Local proxy example
+  - host: 192.168.100.1
+    port: 2112
+    type: http
+    username: ""  # Leave empty if no authentication
+    password: ""  # Leave empty if no authentication
+
+  # Authenticated proxy examples
+  # - host: us-proxy.example.com
+  #   port: 8080
+  #   type: http
+  #   username: your-proxy-username
+  #   password: your-proxy-password
+
+  # - host: uk-proxy.example.com
+  #   port: 8080
+  #   type: http
+  #   username: your-proxy-username
+  #   password: your-proxy-password
+
+  # SOCKS5 proxy example
+  # - host: socks-proxy.example.com
+  #   port: 1080
+  #   type: socks5
+  #   username: your-username
+  #   password: your-password
+
+# Playback Configuration
+playback:
+  # Songs to play
+  songs:
+    - "https://open.spotify.com/track/0docDTO7aMbzz3vOkQfSTc"
+    # Add more songs
+    # - "https://open.spotify.com/track/another-track-id"
+    # - "https://open.spotify.com/track/yet-another-track-id"
+
+  # Repeat count range
+  repeat_count: [2, 3]  # Will repeat each song 2-3 times
+
+  # Play duration range in seconds
+  play_duration: [110, 120]  # Play for 110-120 seconds
+
+  # Delay between sessions in seconds
+  session_delay: [5, 10]  # Wait 5-10 seconds between sessions
+
+# Advanced Configuration
+# These settings are optional and have sensible defaults
+
+# Anti-detection settings
+stealth:
+  # User agents (will be auto-selected based on geo-location)
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+  # Screen resolutions
+  screen_sizes:
+    - [1920, 1080]
+    - [1366, 768]
+    - [1440, 900]
+    - [1536, 864]
+
+  # Languages (will be auto-selected based on geo-location)
+  languages:
+    - "en-US"
+    - "en-GB"
+    - "en-CA"
+    - "en-AU"
+
+  # Timezones (will be auto-selected based on geo-location)
+  timezones:
+    - "America/New_York"
+    - "Europe/London"
+    - "Asia/Hong_Kong"
+    - "Europe/Berlin"
+    - "America/Toronto"
+
+# Example configurations for different regions
+
+# US Configuration Example
+# accounts:
+#   - email: us-user@example.com
+#     password: password123
+#     proxy: us-proxy.smartproxy.com:8080:username:password
+
+# UK Configuration Example
+# accounts:
+#   - email: uk-user@example.com
+#     password: password123
+#     proxy: uk-proxy.smartproxy.com:8080:username:password
+
+# Hong Kong Configuration Example
+# accounts:
+#   - email: hk-user@example.com
+#     password: password123
+#     proxy: hk-proxy.example.com:8080:username:password
+
+# Multiple Region Setup Example
+# accounts:
+#   - email: user1@example.com
+#     password: pass1
+#     proxy: us-proxy.example.com:8080:user1:pass1
+#   - email: user2@example.com
+#     password: pass2
+#     proxy: uk-proxy.example.com:8080:user2:pass2
+#   - email: user3@example.com
+#     password: pass3
+#     proxy: hk-proxy.example.com:8080:user3:pass3
+
+# proxies:
+#   - host: us-proxy.example.com
+#     port: 8080
+#     type: http
+#     username: user1
+#     password: pass1
+#   - host: uk-proxy.example.com
+#     port: 8080
+#     type: http
+#     username: user2
+#     password: pass2
+#   - host: hk-proxy.example.com
+#     port: 8080
+#     type: http
+#     username: user3
+#     password: pass3
+
+# Notes:
+# 1. Replace example values with your actual credentials
+# 2. Keep this file secure and don't share it
+# 3. Test your configuration with: npm run test
+# 4. The system will auto-detect proxy locations and match appropriate settings
+# 5. For 2captcha integration, set environment variable: export CAPTCHA_API_KEY=your-key

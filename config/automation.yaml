@@ -1,0 +1,110 @@
+# Spotify Automation Configuration
+
+# Language preferences for geo-matching
+language:
+  # Prefer English for international compatibility
+  prefer_english: true
+
+  # Fallback languages by region
+  fallback_languages:
+    HK: ['en-HK', 'en']  # Hong Kong: English first
+    US: ['en-US', 'en']
+    GB: ['en-GB', 'en']
+    CA: ['en-CA', 'en', 'fr-CA']
+    AU: ['en-AU', 'en']
+    DE: ['en', 'de-DE']
+    DEFAULT: ['en-US', 'en']
+
+# Browser automation settings
+browser:
+  # Headless mode for production
+  headless: false
+
+  # Timeout settings (milliseconds)
+  timeouts:
+    page_load: 30000
+    element_wait: 10000
+    login_process: 60000
+    captcha_solve: 120000
+
+  # Human behavior simulation
+  human_behavior:
+    typing_delay: [50, 150]  # Random delay between keystrokes
+    mouse_movement: true     # Enable random mouse movements
+    scroll_behavior: true    # Enable random scrolling
+    click_delay: [100, 300]  # Random delay before clicks
+
+# Captcha solving configuration
+captcha:
+  # Enable automatic captcha solving
+  auto_solve: true
+
+  # 2captcha service settings
+  service: "2captcha"
+
+  # Timeout for captcha solving (seconds)
+  timeout: 120
+
+  # Fallback to manual if auto-solve fails
+  manual_fallback: true
+
+  # Manual wait time (seconds)
+  manual_wait_time: 60
+
+# Proxy configuration
+proxy:
+  # Enable real IP detection for geo-matching
+  detect_real_location: true
+
+  # Connection timeout (seconds)
+  connection_timeout: 15
+
+  # Retry attempts for failed connections
+  retry_attempts: 3
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+
+  # Enable detailed geo-matching logs
+  geo_matching_details: true
+
+  # Enable browser automation logs
+  browser_details: false
+
+# Session management
+session:
+  # Maximum concurrent sessions
+  max_concurrent: 5
+
+  # Session timeout (minutes)
+  timeout: 30
+
+  # Cleanup interval (minutes)
+  cleanup_interval: 10
+
+# Error handling
+error_handling:
+  # Maximum retry attempts
+  max_retries: 3
+
+  # Retry delay (seconds)
+  retry_delay: 5
+
+  # Continue on non-critical errors
+  continue_on_error: true
+
+# Development/Testing settings
+development:
+  # Enable debug mode
+  debug_mode: false
+
+  # Keep browser open after completion
+  keep_browser_open: false
+
+  # Extended timeouts for debugging
+  extended_timeouts: false
+
+  # Mock captcha solving for testing
+  mock_captcha: false
