@@ -4,31 +4,95 @@ const fs = require('fs');
 const path = require('path');
 const Logger = require('./logger');
 const SessionManager = require('./session-manager');
-const ProxyManager = require('./proxy-manager');
+const SmartproxyManager = require('./smartproxy-manager'); // Updated to SmartproxyManager
 const StealthConfig = require('./stealth-config');
 const CaptchaSolver = require('./captcha-solver');
 const ConfigManager = require('./config-manager');
+const BehaviorEngine = require('./behavior-engine');
+const ShiftScheduler = require('./shift-scheduler');
+const Dashboard = require('./dashboard');
+const MonitoringSystem = require('./monitoring-system'); // Import MonitoringSystem
 
 class SpotifyAutomation {
-    constructor() {
-        this.logger = new Logger();
-        this.configManager = new ConfigManager();
-        this.sessionManager = new SessionManager();
-        this.proxyManager = new ProxyManager();
-        this.stealthConfig = new StealthConfig();
-        this.captchaSolver = new CaptchaSolver(process.env.CAPTCHA_API_KEY);
-        this.config = this.loadConfig();
+    constructor(configManagerInstance, loggerInstance) { // Allow optional injection for testing
+        this.configManager = configManagerInstance || new ConfigManager();
+        this.logger = loggerInstance || new Logger('spotify-automation');
+
+        this.accountsConfig = this.loadAccountsConfig();
+
+        // Instantiate Managers, passing dependencies
+        this.proxyManager = new SmartproxyManager(this.configManager, this.logger.getChildLogger('proxy'));
+
+        // For MonitoringSystem, it needs many components. Some might not be fully ready here.
+        // Pass them and let MonitoringSystem handle their potential unavailability if necessary during its own methods.
+        // Dashboard is instantiated first, then passed to MonitoringSystem
+        this.dashboard = new Dashboard(null, this.configManager, this.proxyManager, null); // Initial pass, SessionManager and MonitoringSystem will be updated
+
+        this.monitoringSystem = new MonitoringSystem(
+            this.configManager,
+            null, // sessionManager not yet created
+            this.proxyManager,
+            null, // scheduler not yet created
+            this.dashboard // Pass the dashboard instance
+        );
+        // Now update dashboard with monitoring system
+        this.dashboard.monitoringSystem = this.monitoringSystem;
+
+
+        // SessionManager needs MonitoringSystem, ShiftScheduler, BehaviorEngine, ProxyManager
+        this.sessionManager = new SessionManager(
+            this.logger.getChildLogger('session'),
+            this.configManager,
+            this.scheduler, // Pass the main ShiftScheduler instance
+            this.behaviorEngine, // Pass BehaviorEngine instance
+            this.proxyManager,
+            this.monitoringSystem
+        );
+        // Update MonitoringSystem and Dashboard with the now created SessionManager
+        this.monitoringSystem.sessionManager = this.sessionManager;
+        this.dashboard.sessionManager = this.sessionManager;
+
+
+        this.stealthConfig = new StealthConfig(); // Typically doesn't need other managers
+        this.captchaSolver = new CaptchaSolver(
+            process.env.CAPTCHA_API_KEY || this.configManager.getCaptchaSettings()?.apiKey,
+            this.logger.getChildLogger('captcha')
+        );
+        this.behaviorEngine = new BehaviorEngine(this.configManager);
+
+        this.scheduler = new ShiftScheduler(
+            this, // Pass SpotifyAutomation instance
+            this.sessionManager,
+            this.configManager
+        );
+        // Update MonitoringSystem with the now created ShiftScheduler
+        this.monitoringSystem.shiftScheduler = this.scheduler;
+
         this.sessions = new Map();
+
+        this.logger.info('SpotifyAutomation: All components initialized.');
     }
 
-    // Load configuration from YAML file
-    loadConfig() {
+    // Load accounts configuration from YAML file
+    loadAccountsConfig() {
         try {
             const configPath = path.join(__dirname, '../config/accounts.yaml');
+            if (!fs.existsSync(configPath)) {
+                this.logger.error('accounts.yaml not found! Cannot start sessions.');
+                process.exit(1); // Critical error
+            }
             const configFile = fs.readFileSync(configPath, 'utf8');
-            return YAML.parse(configFile);
+            const parsedConfig = YAML.parse(configFile);
+            if (!parsedConfig || !parsedConfig.accounts || parsedConfig.accounts.length === 0) {
+                this.logger.error('No accounts found in accounts.yaml or file is empty. Cannot start sessions.');
+                process.exit(1); // Critical error
+            }
+            // Make the accounts config available at this.config as other parts of the class might expect it there.
+            // This also ensures that the 'config' property used by Scheduler for totalCapacity is the accounts config.
+            this.config = parsedConfig;
+            return parsedConfig;
         } catch (error) {
-            this.logger.error('Failed to load config:', error);
+            this.logger.error('Failed to load accounts.yaml:', error);
             process.exit(1);
         }
     }
@@ -522,45 +586,241 @@ class SpotifyAutomation {
         return null;
     }
 
-    // Start multiple sessions
-    async start(sessionCount = 1) {
-        this.logger.info(`Starting ${sessionCount} sessions`);
-
-        const promises = [];
-
-        for (let i = 0; i < sessionCount; i++) {
-            const account = this.config.accounts[i % this.config.accounts.length];
-
-            // Try to get proxy from account first, then from proxy pool
-            let proxy = this.parseProxyFromAccount(account);
-            if (!proxy && this.config.proxies && this.config.proxies.length > 0) {
-                proxy = this.config.proxies[i % this.config.proxies.length];
-            }
-
-            this.logger.info(`Session ${i + 1}: Account ${account.email}, Proxy: ${proxy ? proxy.host + ':' + proxy.port : 'none'}`);
-
-            const sessionPromise = this.runSession(i + 1, account, proxy);
-            promises.push(sessionPromise);
-
-            // Stagger session starts
-            await new Promise(resolve => setTimeout(resolve, 2000));
+    // Start multiple sessions, now primarily managed by Scheduler or specific commands
+    async startInitialSessions(sessionCount = 1) {
+        this.logger.info(`Starting initial ${sessionCount} sessions as per direct command.`);
+        if (!this.accountsConfig || !this.accountsConfig.accounts || this.accountsConfig.accounts.length === 0) {
+            this.logger.error("No accounts configured. Cannot start sessions.");
+            return;
         }
 
-        await Promise.all(promises);
-        this.logger.info('All sessions completed');
+        const numToStart = Math.min(sessionCount, this.accountsConfig.accounts.length);
+        this.logger.info(`Attempting to start ${numToStart} sessions.`);
+
+        // This method is now more about an initial burst or a specific command
+        // rather than the primary way sessions are managed if Scheduler is active.
+        await this.runMoreSessions(numToStart);
+    }
+
+    // Method for Scheduler to start more sessions
+    async runMoreSessions(count) {
+        this.logger.info(`Received request to run ${count} more sessions.`);
+        if (!this.accountsConfig || !this.accountsConfig.accounts || this.accountsConfig.accounts.length === 0) {
+            this.logger.error("No accounts loaded. Cannot start new sessions.");
+            return;
+        }
+
+        const availableAccounts = this.accountsConfig.accounts;
+        const currentlyActiveSessions = this.sessionManager.getAllSessions();
+        let startedCount = 0;
+
+        for (let i = 0; i < count; i++) {
+            // Find an account that is not currently in an active session
+            // This is a simplified selection logic. A more robust system would track account usage, cooldowns, etc.
+            const nextAccount = availableAccounts.find(acc =>
+                !currentlyActiveSessions.some(sess => sess.account && sess.account.email === acc.email && sess.status !== 'failed' && sess.status !== 'completed' && sess.status !== 'stopped')
+            );
+
+            if (!nextAccount) {
+                this.logger.warn("No available (unused) accounts to start a new session. Needed more but couldn't find one.");
+                break; // No more available accounts
+            }
+
+            // sessionId could be generated by sessionManager.createSession or passed if already known.
+            // For simplicity, let runSession generate it or use one from sessionManager.
+            const sessionId = this.sessionManager.generateSessionId();
+            let proxy = this.parseProxyFromAccount(nextAccount);
+            if (!proxy && this.accountsConfig.proxies && this.accountsConfig.proxies.length > 0) {
+                // Basic round-robin for proxies if not specified in account
+                // This proxy selection logic might need to be more sophisticated (e.g., via ProxyManager)
+                const proxyIndex = (currentlyActiveSessions.length + startedCount) % this.accountsConfig.proxies.length;
+                proxy = this.accountsConfig.proxies[proxyIndex];
+            }
+
+            this.logger.info(`Starting new session ${sessionId} for account ${nextAccount.email}. Proxy: ${proxy ? proxy.host : 'none'}`);
+            // Run session asynchronously without awaiting all of them here to allow parallel startup.
+            this.runSession(sessionId, nextAccount, proxy).catch(error => {
+                this.logger.error(`Error during session ${sessionId} execution:`, error);
+                // Error handling for individual session failure is within runSession
+            });
+            startedCount++;
+            await new Promise(resolve => setTimeout(resolve, this.configManager.getSessionSettings().stagger_delay || 2000)); // Stagger
+        }
+        this.logger.info(`Successfully initiated ${startedCount} new sessions.`);
+    }
+
+    // Method for Scheduler to stop some sessions
+    async stopSomeSessions(count) {
+        this.logger.info(`Received request to stop ${count} sessions.`);
+        const activeSessions = this.sessionManager.getAllSessions().filter(s => s.status === 'running' || s.status === 'idle' || s.status === 'initializing' || s.status === 'paused');
+
+        if (activeSessions.length === 0) {
+            this.logger.info("No active sessions to stop.");
+            return;
+        }
+
+        const numToStop = Math.min(count, activeSessions.length);
+        this.logger.info(`Attempting to stop ${numToStop} sessions.`);
+
+        for (let i = 0; i < numToStop; i++) {
+            // Simple strategy: stop the "oldest" running session or least active.
+            // For now, just take the first ones from the filtered list.
+            // A more sophisticated strategy could involve session activity, age, or other metrics.
+            const sessionToStop = activeSessions[i];
+            if (sessionToStop && sessionToStop.id) {
+                this.logger.info(`Stopping session ${sessionToStop.id}.`);
+                // This needs to gracefully stop the browser and cleanup.
+                // Assuming cleanupSession handles status updates and resource release.
+                // We need a way to signal the Playwright browser to close.
+                // This might involve finding the browser instance associated with the session.
+                // For now, we'll call cleanupSession which updates status and removes from active.
+                // The actual browser closing needs to be handled if not already done by runSession's finally block on error.
+
+                // Find the browser instance to close it. This is a challenge as runSession manages its own browser.
+                // One way is to store browser instances in SessionManager or make runSession responsive to a stop signal.
+                // For now, just marking as 'stopped'. Actual resource cleanup needs robust handling.
+                this.sessionManager.updateSessionStatus(sessionToStop.id, 'stopped', 'Scheduled stop by Scheduler');
+                this.sessionManager.cleanupSession(sessionToStop.id, 'stopped', 'Scheduled stop by Scheduler');
+                // TODO: Ensure browser associated with sessionToStop.id is actually closed.
+                // This might require a map of sessionId to browser instance or a more direct control mechanism.
+            }
+        }
+        this.logger.info(`Successfully stopped ${numToStop} sessions.`);
+    }
+
+    async initializeAndStart() {
+        this.logger.info("Starting SpotifyAutomation system initialization...");
+
+        // Handle DASHBOARD_ONLY mode
+        if (process.env.DASHBOARD_ONLY === 'true') {
+            this.logger.info('Running in DASHBOARD_ONLY mode.');
+            // Only start components necessary for the dashboard.
+            // ConfigManager and Logger are already initialized.
+            // MonitoringSystem might be needed if dashboard relies on its report structure,
+            // but it would need a way to get data if SessionManager isn't running.
+            // For now, let's assume the dashboard in this mode might show limited data
+            // or is configured to fetch from a running session-manager service.
+
+            // Ensure dashboard has its essential components even if others are not fully active
+            if (this.dashboard) {
+                 // If MonitoringSystem is used by dashboard, it needs to be robust to missing managers
+                if (this.monitoringSystem) {
+                    this.monitoringSystem.sessionManager = this.monitoringSystem.sessionManager || { getSessionStatsSummary: () => ({}), getAllSessions: () => [] }; // Mocked if not present
+                    this.monitoringSystem.proxyManager = this.monitoringSystem.proxyManager || { getProxyStats: () => ({}) };
+                    this.monitoringSystem.shiftScheduler = this.monitoringSystem.shiftScheduler || { getCurrentShift: () => "N/A_dashboard_only" };
+                }
+                 if(this.dashboard.monitoringSystem && !this.dashboard.monitoringSystem.sessionManager) { // If it wasn't set due to SM not existing
+                    this.dashboard.monitoringSystem.sessionManager = { getSessionStatsSummary: () => ({}), getAllSessions: () => [] };
+                 }
+                 if(this.dashboard.sessionManager === null && this.monitoringSystem?.sessionManager) { // If dashboard's SM is null but MS has one (mocked)
+                    this.dashboard.sessionManager = this.monitoringSystem.sessionManager;
+                 }
+
+
+                const appPort = process.env.APP_PORT || this.configManager.getFullAutomationConfig()?.dashboard?.port || 8080;
+                this.dashboard.start(appPort);
+                this.logger.info(`Dashboard (standalone) started on port ${appPort}.`);
+            } else {
+                this.logger.error('Dashboard instance not available in DASHBOARD_ONLY mode.');
+            }
+            // Do not proceed with full system startup (scheduler, sessions, etc.)
+            return;
+        }
+
+        // Full system startup
+        await this.proxyManager.initializePool();
+        this.logger.info('Proxy pool initialized.');
+
+        await this.scheduler.initialize();
+        this.scheduler.start();
+        this.logger.info('ShiftScheduler initialized and started.');
+
+        const heartbeatInterval = this.configManager.getFullAutomationConfig()?.monitoring?.heartbeat_interval_ms || 30000;
+        this.monitoringSystem.startHeartbeatMonitoring(heartbeatInterval);
+        this.logger.info('MonitoringSystem heartbeat monitoring started.');
+
+        const dashboardSettings = this.configManager.getFullAutomationConfig()?.dashboard;
+        const dashboardPort = dashboardSettings?.port || 3000;
+        // In full mode, the main app (session-manager service) runs the dashboard.
+        // The separate 'dashboard' service in docker-compose is for DASHBOARD_ONLY=true.
+        // So, the port here should be the main app's port (3000 by default).
+        this.dashboard.start(dashboardPort);
+        this.logger.info(`Dashboard (integrated) started on port ${dashboardPort}.`);
+
+        const initialSessionCount = this.configManager.getSessionSettings()?.initial_startup_count || 0;
+        if (initialSessionCount > 0 && Object.keys(this.scheduler.shiftsConfig).length === 0) {
+            this.logger.info(`Scheduler has no defined shifts. Starting initial ${initialSessionCount} sessions based on config.`);
+            await this.startInitialSessions(initialSessionCount);
+        } else if (Object.keys(this.scheduler.shiftsConfig).length > 0) {
+            this.logger.info("Scheduler is active and will manage session capacity based on current shift definitions.");
+            // Scheduler's `start()` method already calls `adjustCapacity` for the current time.
+        } else {
+            this.logger.info("No initial sessions configured to start, and scheduler has no shifts. System will be idle until sessions are started via API or other triggers (if implemented).");
+        }
+
+        // If SessionManager has a polled lifecycle management (it does, manageLifecycle)
+        // This could be started here.
+        const lifecycleInterval = this.configManager.getFullAutomationConfig()?.session_manager?.lifecycle_interval_ms || 60000; // Default 1 min
+        this.sessionManagerLifecycleIntervalId = setInterval(() => {
+            if (this.sessionManager && typeof this.sessionManager.manageLifecycle === 'function') {
+                this.sessionManager.manageLifecycle().catch(err => {
+                    this.logger.error('Error during SessionManager manageLifecycle:', err);
+                });
+            }
+        }, lifecycleInterval);
+        this.logger.info(`SessionManager lifecycle management polling started every ${lifecycleInterval}ms.`);
+
+
+        this.logger.info("SpotifyAutomation system initialization complete. System is running.");
+    }
+
+    // Graceful shutdown
+    async shutdown() {
+        this.logger.info('Initiating graceful shutdown...');
+        if (this.monitoringSystem) {
+            this.monitoringSystem.stopHeartbeatMonitoring();
+        }
+        if (this.sessionManagerLifecycleIntervalId) {
+            clearInterval(this.sessionManagerLifecycleIntervalId);
+        }
+        // TODO: Stop scheduler cron jobs
+        // TODO: Gracefully stop all active sessions via SessionManager
+        const activeSessions = this.sessionManager ? this.sessionManager.getAllSessions() : [];
+        if (activeSessions.length > 0) {
+            this.logger.info(`Stopping ${activeSessions.length} active sessions...`);
+            await this.stopSomeSessions(activeSessions.length); // stopSomeSessions needs to be more robust for this
+        }
+        // TODO: Close dashboard server (if it holds the process open)
+        this.logger.info('Shutdown sequence completed.');
+        process.exit(0);
     }
 }
 
 // Main execution
 async function main() {
     const automation = new SpotifyAutomation();
-    const sessionCount = process.env.SESSION_COUNT || 3;
+    await automation.initializeAndStart();
 
-    await automation.start(parseInt(sessionCount));
+    process.on('SIGINT', async () => {
+        await automation.shutdown();
+    });
+    process.on('SIGTERM', async () => {
+        await automation.shutdown();
+    });
+
+    // Keep alive for long-running processes like scheduler and dashboard server
+    // Keep alive for scheduler (if not in a server context like Express)
+    // This is a simple way; a more robust solution might involve an empty interval or server.
+    if (!module.parent) { // Only run keep-alive if this is the main module
+        setInterval(() => { /* Keep process alive for cron jobs */ }, 1000 * 60 * 60);
+    }
 }
 
 if (require.main === module) {
-    main().catch(console.error);
+    main().catch(error => {
+        console.error("Unhandled error in main execution:", error);
+        process.exit(1);
+    });
 }
 
 module.exports = SpotifyAutomation;

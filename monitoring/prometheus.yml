@@ -1,0 +1,46 @@
+global:
+  scrape_interval: 15s # Default scrape interval
+  evaluation_interval: 15s # Default evaluation interval
+
+# Alertmanager configuration (optional, if you set up Alertmanager)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093'] # Assuming Alertmanager runs on this host/port
+
+# Rule files (optional, for recording or alert rules)
+# rule_files:
+#   - "rules/*.rules.yml"
+
+scrape_configs:
+  - job_name: 'spotify-automation-session-manager'
+    # Metrics endpoint exposed by your main application (session-manager service)
+    # This assumes your application will expose a /metrics endpoint in Prometheus format.
+    # This might require adding a metrics library like 'prom-client' to your Node.js app
+    # and exposing an endpoint (e.g., on the main app's port 3000).
+    static_configs:
+      - targets: ['session-manager:3000'] # Docker Compose service name and app port
+    # Example if your app exposes metrics on a different path:
+    # metrics_path: /metrics
+    # Example if your app uses a different port for metrics:
+    # static_configs:
+    #   - targets: ['session-manager:9100']
+
+  # Example: Scraping Node Exporter metrics if you add it to your services
+  # - job_name: 'node-exporter'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100'] # Assuming node-exporter service runs on this port
+
+  # Example: Scraping Docker daemon metrics (if enabled in Docker)
+  # - job_name: 'docker'
+  #   static_configs:
+  #     - targets: ['docker.for.mac.localhost:9323'] # Example for Docker Desktop Mac
+    # For Linux, might be different or require enabling metrics in Docker daemon.json
+    # metrics_path: /metrics
+    # scheme: http # or https if configured
+
+  # If your dashboard service (running in DASHBOARD_ONLY mode) also exposes metrics:
+  # - job_name: 'spotify-automation-dashboard'
+  #   static_configs:
+  #     - targets: ['dashboard:8080'] # Docker Compose service name and its APP_PORT
+  #   metrics_path: /metrics # Assuming it also exposes /metrics

@@ -9,7 +9,7 @@
     "farm": "node src/index.js --mode=farm",
     "dashboard": "node src/index.js --mode=dashboard",
     "monitor": "node src/index.js --mode=monitor",
-    "test": "node src/index.js --mode=test",
+    "test": "jest",
     "docker:build": "docker build -t spotify-farm .",
     "docker:run": "docker-compose up -d",
     "docker:scale": "docker-compose up -d --scale worker=10",

@@ -1,0 +1,50 @@
+# Configuration for SmartproxyManager
+
+# Smartproxy API credentials and settings (if fetching proxy list dynamically)
+# smartproxy_api_user: "your_smartproxy_username"
+# smartproxy_api_pass: "your_smartproxy_password"
+# smartproxy_endpoint: "gate.smartproxy.com:7000" # Example residential endpoint
+# smartproxy_api_endpoint: "https://api.smartproxy.com/v1/..." # Example API endpoint for fetching list
+
+# Alternatively, a predefined list of proxies (if not using dynamic fetching)
+# Ensure each proxy has a unique 'id' or 'host:port' will be used as id.
+# Type can be 'http', 'https', 'socks5', etc.
+predefined_proxies:
+  - id: "static_proxy_1"
+    host: "proxy-de.example.com"
+    port: 31112
+    username: "proxyuser1"
+    password: "proxypassword1"
+    type: "http"
+  - id: "static_proxy_2"
+    host: "proxy-us.example.com"
+    port: 31113
+    username: "proxyuser2"
+    password: "proxypassword2"
+    type: "http"
+  - id: "datacenter_proxy_1"
+    host: "dc.proxy.example.org"
+    port: 8000
+    # No username/password if it's an IP-authenticated proxy
+    type: "http"
+
+# Maximum number of concurrent sessions allowed per proxy.
+# Proxies exceeding this limit won't be selected for new sessions.
+maxSessionsPerProxy: 3
+
+# Interval in milliseconds to re-check the health of a proxy after it has failed.
+# 300000 ms = 5 minutes
+recheckIntervalMs: 300000
+
+# Maximum number of consecutive failures before a proxy is removed from the pool.
+# (Optional, if not set, proxies might stay in unhealthy state indefinitely until next successful check)
+maxFailuresBeforeRemoval: 5
+
+# Proxy rotation strategy (placeholder for future use, current is session-based assignment)
+# Options: "session-based", "round-robin", "least-used", "random"
+rotationStrategy: "session-based"
+
+# Health checker settings (placeholders for future more detailed config)
+# healthCheckTargetUrl: "https://www.google.com" # URL to test proxies against
+# healthCheckTimeoutMs: 10000 # Timeout for a health check request
+# healthCheckExpectedStatusCode: 200 # Expected HTTP status code for a healthy proxy
